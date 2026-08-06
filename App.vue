@@ -46,7 +46,12 @@
               <tr v-for="record in records" :key="record.id">
                 <td>{{ record.type }}</td>
                 <td>{{ record.name }}</td>
-                <td><span class="badge">{{ record.line === 'default' ? '默认' : record.line }}</span></td>
+                <td>
+                  <!-- 高亮非默认线路，视觉更直观 -->
+                  <span :class="['badge', record.line === 'default' ? '' : 'highlight']">
+                    {{ record.line === 'default' ? '默认' : record.line }}
+                  </span>
+                </td>
                 <td class="content-cell">{{ record.content }}</td>
                 <td>{{ record.ttl }}</td>
                 <td>
@@ -60,9 +65,8 @@
       </div>
     </div>
 
-    <!-- 拖拽缩放的日志面板 -->
+    <!-- 日志面板 (自动滚动到底部) -->
     <div class="log-panel-container" v-show="showLogs" :style="{ height: logPanelHeight + 'px' }">
-      <!-- 拖拽调整条绑定 mousedown -->
       <div class="resizer" @mousedown="startDrag">
         <div class="resizer-line"></div>
       </div>
@@ -71,7 +75,8 @@
           <span>实时运行日志</span>
           <button class="hide-log-btn" @click="showLogs = false">▼ 隐藏</button>
         </div>
-        <div class="log-content">
+        <!-- 绑定 logContentRef 以实现自动滚动 -->
+        <div class="log-content" ref="logContentRef">
           <div v-for="(log, index) in logs" :key="index" :class="['log-item', log.level]">
             <span class="log-time">[{{ log.time }}]</span> {{ log.msg }}
           </div>
@@ -79,7 +84,6 @@
       </div>
     </div>
 
-    <!-- 悬浮显示日志按钮 -->
     <button class="floating-log-btn" v-show="!showLogs" @click="showLogs = true">
       ▲ 显示日志
     </button>
@@ -117,7 +121,7 @@
           <div class="form-row">
             <div class="form-group half">
               <label>线路分流 (Line)</label>
-              <input type="text" v-model="editingRecord.line" placeholder="default / telecom / unicom 等" />
+              <input type="text" v-model="editingRecord.line" placeholder="default / telecom 等" />
             </div>
             <div class="form-group half">
               <label>TTL (秒)</label>
@@ -164,7 +168,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, nextTick } from 'vue';
 
 const providers = [
   { id: 'huawei', name: '华为云' },
@@ -179,9 +183,10 @@ const domains = ref([]);
 const records = ref([]);
 const logs = ref([]);
 
-// ----- 日志拖拽逻辑 (修复全局监听) -----
+// 日志拖拽与自动滚动逻辑
 const showLogs = ref(true);
 const logPanelHeight = ref(200);
+const logContentRef = ref(null);
 let isDragging = false;
 let startY = 0;
 let startHeight = 0;
@@ -206,14 +211,20 @@ const stopDrag = () => {
     document.body.style.userSelect = '';
   }
 };
-// ----------------------------------------
 
 const addLog = (msg, level = 'info') => {
   const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-  logs.value.unshift({ time, msg, level });
+  // 改为 push：新日志追加到底部
+  logs.value.push({ time, msg, level });
+  // 渲染完成后自动滚动到底部
+  nextTick(() => {
+    if (logContentRef.value) {
+      logContentRef.value.scrollTop = logContentRef.value.scrollHeight;
+    }
+  });
 };
 
-// --- CRUD 操作逻辑 ---
+// CRUD 操作逻辑
 const showRecordModal = ref(false);
 const editingRecord = ref({});
 
@@ -235,7 +246,6 @@ const saveRecord = async () => {
   showRecordModal.value = false;
   
   if (editingRecord.value.id) {
-    // Update
     addLog(`正在提交修改记录 [${editingRecord.value.name}]...`, 'info');
     try {
       await window.go.main.DNSService.UpdateRecord(currentProvider.value, currentDomain.value, editingRecord.value);
@@ -244,7 +254,6 @@ const saveRecord = async () => {
       addLog(`修改失败: ${err}`, 'error');
     }
   } else {
-    // Create
     addLog(`正在提交添加记录 [${editingRecord.value.name}]...`, 'info');
     try {
       await window.go.main.DNSService.AddRecord(currentProvider.value, currentDomain.value, editingRecord.value);
@@ -268,9 +277,8 @@ const deleteRecord = async (record) => {
     }
   }
 };
-// ----------------------
 
-// --- API 配置存储 ---
+// API 配置存储
 const showSettings = ref(false);
 const globalConfig = ref({});
 const form = ref({ name: '', accessKey: '', secretKey: '', region: 'cn-north-1', email: '' });
@@ -295,7 +303,6 @@ const saveSettings = async () => {
     selectProvider(currentProvider.value); 
   }
 };
-// ----------------------
 
 const selectProvider = async (pid) => {
   currentProvider.value = pid;
@@ -356,6 +363,7 @@ onMounted(() => {
 .record-table th { background: #f5f7fa; font-weight: bold; color: #303133; }
 .content-cell { word-break: break-all; }
 .badge { background: #f4f4f5; color: #909399; padding: 3px 8px; border-radius: 4px; font-size: 12px; border: 1px solid #e9e9eb; }
+.badge.highlight { background: #ecf5ff; color: #409eff; border-color: #d9ecff; font-weight: bold; }
 .action-btn { padding: 5px 10px; cursor: pointer; border: 1px solid #dcdfe6; background: #fff; border-radius: 4px; color: #606266; margin-right: 5px; font-size: 12px; }
 .action-btn:hover { color: #409eff; border-color: #c6e2ff; background: #ecf5ff; }
 .action-btn.danger:hover { color: #f56c6c; border-color: #fbc4c4; background: #fef0f0; }
