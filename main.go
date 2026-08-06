@@ -2,7 +2,10 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"log"
+	"os"
+	"path/filepath"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -12,7 +15,6 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-// DNSRecord 结构
 type DNSRecord struct {
 	ID      string `json:"id"`
 	Type    string `json:"type"`
@@ -20,42 +22,68 @@ type DNSRecord struct {
 	Content string `json:"content"`
 }
 
-// DNSService 绑定给前端
-type DNSService struct{}
+// AppConfig 用于保存各个厂商的密钥
+type AppConfig struct {
+	HuaweiAK string `json:"huaweiAK"`
+	HuaweiSK string `json:"huaweiSK"`
+}
 
-func NewDNSService() *DNSService { return &DNSService{} }
+type DNSService struct {
+	config AppConfig
+}
 
-// 模拟获取域名列表（供前端交互测试）
+func NewDNSService() *DNSService {
+	s := &DNSService{}
+	s.LoadConfig() // 启动时自动读取本地密钥
+	return s
+}
+
+// 读取本地配置
+func (s *DNSService) LoadConfig() AppConfig {
+	home, _ := os.UserHomeDir()
+	configPath := filepath.Join(home, "dns-manager-config.json")
+	data, err := os.ReadFile(configPath)
+	if err == nil {
+		json.Unmarshal(data, &s.config)
+	}
+	return s.config
+}
+
+// 保存配置到本地
+func (s *DNSService) SaveConfig(config AppConfig) bool {
+	s.config = config
+	home, _ := os.UserHomeDir()
+	configPath := filepath.Join(home, "dns-manager-config.json")
+	data, _ := json.MarshalIndent(config, "", "  ")
+	err := os.WriteFile(configPath, data, 0644)
+	return err == nil
+}
+
+// 联调测试：获取域名列表
 func (s *DNSService) GetDomains(provider string) []string {
-	switch provider {
-	case "cloudflare":
-		return []string{"cf-domain.com", "example.net"}
-	case "aliyun":
-		return []string{"aliyun-test.cn"}
-	case "tencent":
-		return []string{"tencent-cloud.com"}
-	case "huawei":
-		return []string{"huawei-tech.cn"}
+	if provider == "huawei" {
+		// 校验：如果没有配置密钥，直接在界面上提示用户
+		if s.config.HuaweiAK == "" || s.config.HuaweiSK == "" {
+			return []string{"[请先点击右上角配置华为云密钥]"}
+		}
+		// 密钥存在，先返回联调占位符，下一步替换为真实的 HTTP 请求
+		return []string{"huawei-real-test.cn"}
 	}
 	return []string{}
 }
 
-// 模拟获取解析记录
+// 联调测试：获取解析记录
 func (s *DNSService) GetRecords(provider, domain string) []DNSRecord {
-	return []DNSRecord{
-		{ID: "1", Type: "A", Name: "www", Content: "192.168.1.1"},
-		{ID: "2", Type: "CNAME", Name: "blog", Content: "cname.test.com"},
+	if provider == "huawei" && domain != "[请先点击右上角配置华为云密钥]" {
+		return []DNSRecord{
+			{ID: "1", Type: "A", Name: "测试连通性", Content: "获取成功，等待接入真实 API"},
+		}
 	}
-}
-
-// 模拟删除操作
-func (s *DNSService) DeleteRecord(provider, domain, id string) bool {
-	return true
+	return []DNSRecord{}
 }
 
 func main() {
 	app := NewDNSService()
-	
 	err := wails.Run(&options.App{
 		Title:  "多厂商 DNS 管理终端",
 		Width:  1024,
@@ -64,10 +92,9 @@ func main() {
 			Assets: assets,
 		},
 		Bind: []interface{}{
-			app, // 绑定后端服务
+			app,
 		},
 	})
-
 	if err != nil {
 		log.Fatal(err)
 	}
