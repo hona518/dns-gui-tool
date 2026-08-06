@@ -82,7 +82,6 @@ func (s *DNSService) SaveConfig(config AppConfig) bool {
 	return err == nil
 }
 
-// ---- 原生 HMAC-SHA256 签名工具 ----
 func HexSha256(data []byte) string {
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])
@@ -94,7 +93,6 @@ func HmacSha256(key []byte, data string) []byte {
 	return mac.Sum(nil)
 }
 
-// 核心功能：手工打造华为云原生鉴权请求
 func (s *DNSService) hwApiRequest(method, path string, body []byte) ([]byte, error) {
 	region := s.config.Huawei.Region
 	if region == "" {
@@ -131,7 +129,6 @@ func (s *DNSService) hwApiRequest(method, path string, body []byte) ([]byte, err
 		canonicalHeaders = fmt.Sprintf("host:%s\nx-sdk-date:%s\n", host, dateStr)
 	}
 
-	// 华为云要求 CanonicalURI 结尾必须有斜杠
 	if !strings.HasSuffix(uri, "/") {
 		uri += "/"
 	}
@@ -159,7 +156,6 @@ func (s *DNSService) hwApiRequest(method, path string, body []byte) ([]byte, err
 	return respBody, nil
 }
 
-// ---- 纯净版数据结构映射 ----
 type HwZoneResp struct {
 	Zones []struct {
 		ID   string `json:"id"`
@@ -186,7 +182,6 @@ type HwRecordPayload struct {
 	TTL     int32    `json:"ttl"`
 	Line    string   `json:"line"`
 }
-// --------------------------------
 
 func (s *DNSService) GetDomains(provider string) []string {
 	if provider != "huawei" {
@@ -290,6 +285,18 @@ func (s *DNSService) GetRecords(provider, domainName string) []DNSRecord {
 			})
 		}
 	}
+
+	// 🛠️ 上帝视角调试模式：将原始报文强制作为一条记录展示在表格最下方
+	records = append(records, DNSRecord{
+		ID:      "debug_raw",
+		ZoneID:  zoneId,
+		Type:    "DEBUG",
+		Name:    "底层原始JSON",
+		Content: string(body),
+		Line:    "上帝视角",
+		TTL:     0,
+	})
+
 	return records
 }
 
