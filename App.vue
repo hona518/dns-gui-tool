@@ -120,9 +120,16 @@
 
           <div class="form-row">
             <div class="form-group half">
-              <label>线路分流 (Line)</label>
-              <input type="text" v-model="editingRecord.line" placeholder="default / telecom 等" />
-            </div>
+  <label>线路分流 (Line)</label>
+  <select v-model="editingRecord.line">
+    <option value="default">全网默认 (default)</option>
+    <option value="telecom">电信 (telecom)</option>
+    <option value="unicom">联通 (unicom)</option>
+    <option value="mobile">移动 (mobile)</option>
+    <option value="tietong">铁通 (tietong)</option>
+    <option value="NA">北美洲 (NA)</option>
+  </select>
+</div>
             <div class="form-group half">
               <label>TTL (秒)</label>
               <input type="number" v-model="editingRecord.ttl" />
