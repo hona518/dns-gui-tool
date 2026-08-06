@@ -3,8 +3,7 @@ name: Build Windows EXE
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -27,16 +26,27 @@ jobs:
     - name: Install Wails CLI
       run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
-    - name: Install Frontend Dependencies
-      working-directory: ./frontend
-      run: npm install
+    - name: Scaffold Wails Project
+      run: wails init -n dns-gui -t vue
 
-    - name: Build Executable
+    - name: Inject Custom Code Files
+      shell: pwsh
+      run: |
+        # 删除生成的默认无效文件
+        Remove-Item -Path "dns-gui\frontend\src\App.vue" -Force
+        Remove-Item -Path "dns-gui\app.go" -Force
+        Remove-Item -Path "dns-gui\main.go" -Force
+        
+        # 将根目录的自定义文件强行注入到标准工程目录中
+        Copy-Item -Path "App.vue" -Destination "dns-gui\frontend\src\App.vue" -Force
+        Copy-Item -Path "main.go" -Destination "dns-gui\main.go" -Force
+
+    - name: Install NPM & Compile Executable
+      working-directory: ./dns-gui
       run: wails build -platform windows/amd64 -m
 
-    - name: Upload EXE Artifact
+    - name: Upload EXE File
       uses: actions/upload-artifact@v4
       with:
         name: DNS-Manager-Windows
-        path: build/bin/*.exe
-        
+        path: dns-gui/build/bin/*.exe
