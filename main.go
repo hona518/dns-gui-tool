@@ -123,14 +123,45 @@ func (s *DNSService) GetDomains(provider string) []string {
 	return []string{"[该厂商真实API尚未接入]"}
 }
 
+// 辅助方法：精准获取 Zone ID
+func (s *DNSService) getZoneIdByName(domainName string) string {
+	client := s.getHuaweiClient()
+	request := &model.ListPublicZonesRequest{
+		Name: &domainName,
+	}
+	response, err := client.ListPublicZones(request)
+	if err == nil && response.Zones != nil {
+		for _, zone := range *response.Zones {
+			name := *zone.Name
+			if len(name) > 0 && name[len(name)-1] == '.' {
+				name = name[:len(name)-1]
+			}
+			if name == domainName {
+				return *zone.Id
+			}
+		}
+	}
+	return ""
+}
+
 func (s *DNSService) GetRecords(provider, domainName string) []DNSRecord {
 	if domainName == "" || domainName[0] == '[' {
 		return []DNSRecord{}
 	}
 	if provider == "huawei" {
 		client := s.getHuaweiClient()
-		request := &model.ListRecordSetsRequest{}
-		response, err := client.ListRecordSets(request)
+		
+		// 1. 获取专属 Zone ID
+		zoneId := s.getZoneIdByName(domainName)
+		if zoneId == "" {
+			return []DNSRecord{{ID: "error", Type: "ERROR", Name: "查询失败", Content: "无法获取域名的Zone ID"}}
+		}
+
+		// 2. 使用 Zone 专属接口拉取，该接口会返回所有的分流线路
+		request := &model.ListRecordSetsByZoneRequest{
+			ZoneId: zoneId,
+		}
+		response, err := client.ListRecordSetsByZone(request)
 		if err != nil {
 			return []DNSRecord{{ID: "error", Type: "ERROR", Name: "API请求失败", Content: err.Error()}}
 		}
@@ -142,6 +173,7 @@ func (s *DNSService) GetRecords(provider, domainName string) []DNSRecord {
 				if len(rName) > 0 && rName[len(rName)-1] == '.' {
 					rName = rName[:len(rName)-1]
 				}
+				
 				if rName == domainName || (len(rName) > len(domainName) && rName[len(rName)-len(domainName)-1:] == "."+domainName) {
 					host := "@"
 					if rName != domainName {
@@ -152,7 +184,12 @@ func (s *DNSService) GetRecords(provider, domainName string) []DNSRecord {
 						content = (*r.Records)[0]
 					}
 					
+					// 成功获取真实的分流线路数据
 					line := "default"
+					if r.Line != nil {
+						line = *r.Line
+					}
+					
 					var ttl int32 = 300
 					if r.Ttl != nil {
 						ttl = *r.Ttl
@@ -160,7 +197,7 @@ func (s *DNSService) GetRecords(provider, domainName string) []DNSRecord {
 					
 					records = append(records, DNSRecord{
 						ID:      *r.Id,
-						ZoneID:  *r.ZoneId,
+						ZoneID:  zoneId,
 						Type:    *r.Type,
 						Name:    host,
 						Content: content,
@@ -173,18 +210,6 @@ func (s *DNSService) GetRecords(provider, domainName string) []DNSRecord {
 		return records
 	}
 	return []DNSRecord{}
-}
-
-func (s *DNSService) getZoneIdByName(domainName string) string {
-	client := s.getHuaweiClient()
-	request := &model.ListPublicZonesRequest{
-		Name: &domainName,
-	}
-	response, err := client.ListPublicZones(request)
-	if err == nil && response.Zones != nil && len(*response.Zones) > 0 {
-		return *(*response.Zones)[0].Id
-	}
-	return ""
 }
 
 // 增
@@ -212,10 +237,14 @@ func (s *DNSService) AddRecord(provider, domainName string, record DNSRecord) er
 	}
 
 	reqBody := &model.CreateRecordSetRequestBody{
-		Name:    fullRecordName, // 创建接口：传递普通 string
-		Type:    record.Type,    // 创建接口：传递普通 string
+		Name:    fullRecordName,
+		Type:    record.Type,
 		Records: []string{record.Content},
 		Ttl:     &ttl,
+	}
+	// 支持自定义添加分流线路
+	if record.Line != "" {
+		reqBody.Line = &record.Line
 	}
 
 	request := &model.CreateRecordSetRequest{
@@ -239,10 +268,14 @@ func (s *DNSService) UpdateRecord(provider, domainName string, record DNSRecord)
 	}
 
 	reqBody := &model.UpdateRecordSetReq{
-		Name:    &fullRecordName, // 修改接口：强制要求传递 *string 指针
-		Type:    &record.Type,    // 修改接口：强制要求传递 *string 指针
+		Name:    &fullRecordName,
+		Type:    &record.Type,
 		Records: &[]string{record.Content},
 		Ttl:     &record.TTL,
+	}
+	// 支持修改分流线路
+	if record.Line != "" {
+		reqBody.Line = &record.Line
 	}
 
 	request := &model.UpdateRecordSetRequest{
@@ -271,7 +304,7 @@ func (s *DNSService) DeleteRecord(provider, zoneID, recordID string) error {
 func main() {
 	app := NewDNSService()
 	err := wails.Run(&options.App{
-		Title:  "多厂商 DNS 管理终端 - CRUD版",
+		Title:  "多厂商 DNS 管理终端 - 最终修订版",
 		Width:  1200,
 		Height: 850,
 		AssetServer: &assetserver.Options{
