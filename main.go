@@ -22,10 +22,21 @@ type DNSRecord struct {
 	Content string `json:"content"`
 }
 
-// AppConfig 用于保存各个厂商的密钥
+// ProviderConfig 统一各厂商配置格式
+type ProviderConfig struct {
+	Name      string `json:"name"`
+	AccessKey string `json:"accessKey"` // 对应 AK / Secret ID
+	SecretKey string `json:"secretKey"` // 对应 SK / Secret Key / API Token
+	Region    string `json:"region"`    // 仅华为云
+	Email     string `json:"email"`     // 仅 Cloudflare
+}
+
+// AppConfig 整体配置文件
 type AppConfig struct {
-	HuaweiAK string `json:"huaweiAK"`
-	HuaweiSK string `json:"huaweiSK"`
+	Huawei     ProviderConfig `json:"huawei"`
+	Aliyun     ProviderConfig `json:"aliyun"`
+	Tencent    ProviderConfig `json:"tencent"`
+	Cloudflare ProviderConfig `json:"cloudflare"`
 }
 
 type DNSService struct {
@@ -34,14 +45,13 @@ type DNSService struct {
 
 func NewDNSService() *DNSService {
 	s := &DNSService{}
-	s.LoadConfig() // 启动时自动读取本地密钥
+	s.LoadConfig()
 	return s
 }
 
-// 读取本地配置
 func (s *DNSService) LoadConfig() AppConfig {
 	home, _ := os.UserHomeDir()
-	configPath := filepath.Join(home, "dns-manager-config.json")
+	configPath := filepath.Join(home, "dns-manager-config-v2.json")
 	data, err := os.ReadFile(configPath)
 	if err == nil {
 		json.Unmarshal(data, &s.config)
@@ -49,34 +59,30 @@ func (s *DNSService) LoadConfig() AppConfig {
 	return s.config
 }
 
-// 保存配置到本地
 func (s *DNSService) SaveConfig(config AppConfig) bool {
 	s.config = config
 	home, _ := os.UserHomeDir()
-	configPath := filepath.Join(home, "dns-manager-config.json")
+	configPath := filepath.Join(home, "dns-manager-config-v2.json")
 	data, _ := json.MarshalIndent(config, "", "  ")
 	err := os.WriteFile(configPath, data, 0644)
 	return err == nil
 }
 
-// 联调测试：获取域名列表
+// 模拟 API 调用（下一版替换为真实请求）
 func (s *DNSService) GetDomains(provider string) []string {
-	if provider == "huawei" {
-		// 校验：如果没有配置密钥，直接在界面上提示用户
-		if s.config.HuaweiAK == "" || s.config.HuaweiSK == "" {
-			return []string{"[请先点击右上角配置华为云密钥]"}
-		}
-		// 密钥存在，先返回联调占位符，下一步替换为真实的 HTTP 请求
+	if provider == "huawei" && s.config.Huawei.AccessKey != "" {
 		return []string{"huawei-real-test.cn"}
 	}
-	return []string{}
+	if provider == "cloudflare" && s.config.Cloudflare.SecretKey != "" {
+		return []string{"cf-test.com"}
+	}
+	return []string{"[暂无数据或未配置有效密钥]"}
 }
 
-// 联调测试：获取解析记录
 func (s *DNSService) GetRecords(provider, domain string) []DNSRecord {
-	if provider == "huawei" && domain != "[请先点击右上角配置华为云密钥]" {
+	if domain != "[暂无数据或未配置有效密钥]" {
 		return []DNSRecord{
-			{ID: "1", Type: "A", Name: "测试连通性", Content: "获取成功，等待接入真实 API"},
+			{ID: "1", Type: "A", Name: "test", Content: "等待接入真实API"},
 		}
 	}
 	return []DNSRecord{}
@@ -85,9 +91,9 @@ func (s *DNSService) GetRecords(provider, domain string) []DNSRecord {
 func main() {
 	app := NewDNSService()
 	err := wails.Run(&options.App{
-		Title:  "多厂商 DNS 管理终端",
-		Width:  1024,
-		Height: 768,
+		Title:  "多厂商 DNS 管理终端 - 1Panel 风格",
+		Width:  1080,
+		Height: 800,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
