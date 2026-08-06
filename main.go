@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,13 +14,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-
-	// 仅引入核心签名器，完全抛弃臃肿且残缺的 DNS Model
-	"github.com/huaweicloud/huaweicloud-sdk-go-v3/core/auth/signer"
 )
 
 //go:embed all:frontend/dist
@@ -80,28 +82,70 @@ func (s *DNSService) SaveConfig(config AppConfig) bool {
 	return err == nil
 }
 
-// 核心封装：原生 HTTP REST 请求与华为云底层签名
+// ---- 原生 HMAC-SHA256 签名工具 ----
+func HexSha256(data []byte) string {
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:])
+}
+
+func HmacSha256(key []byte, data string) []byte {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(data))
+	return mac.Sum(nil)
+}
+
+// 核心功能：手工打造华为云原生鉴权请求
 func (s *DNSService) hwApiRequest(method, path string, body []byte) ([]byte, error) {
 	region := s.config.Huawei.Region
 	if region == "" {
 		region = "cn-north-1"
 	}
-	url := fmt.Sprintf("https://dns.%s.myhuaweicloud.com%s", region, path)
+	host := fmt.Sprintf("dns.%s.myhuaweicloud.com", region)
 
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(body))
+	uri := path
+	query := ""
+	if idx := strings.Index(path, "?"); idx != -1 {
+		uri = path[:idx]
+		query = path[idx+1:]
+	}
+
+	urlStr := fmt.Sprintf("https://%s%s", host, path)
+	req, err := http.NewRequest(method, urlStr, bytes.NewBuffer(body))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Add("Content-Type", "application/json")
 
-	// 仅使用 SDK 的签名器，完美解决最难的鉴权问题
-	sig := &signer.Signer{
-		Key:    s.config.Huawei.AccessKey,
-		Secret: s.config.Huawei.SecretKey,
+	t := time.Now().UTC()
+	dateStr := t.Format("20060102T150405Z")
+
+	req.Header.Set("X-Sdk-Date", dateStr)
+	req.Header.Set("Host", host)
+
+	var signedHeaders, canonicalHeaders string
+	if len(body) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+		signedHeaders = "content-type;host;x-sdk-date"
+		canonicalHeaders = fmt.Sprintf("content-type:application/json\nhost:%s\nx-sdk-date:%s\n", host, dateStr)
+	} else {
+		signedHeaders = "host;x-sdk-date"
+		canonicalHeaders = fmt.Sprintf("host:%s\nx-sdk-date:%s\n", host, dateStr)
 	}
-	sig.Sign(req)
 
-	client := &http.Client{}
+	// 华为云要求 CanonicalURI 结尾必须有斜杠
+	if !strings.HasSuffix(uri, "/") {
+		uri += "/"
+	}
+
+	bodyHash := HexSha256(body)
+	canonicalRequest := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s", method, uri, query, canonicalHeaders, signedHeaders, bodyHash)
+
+	stringToSign := fmt.Sprintf("SDK-HMAC-SHA256\n%s\n%s", dateStr, HexSha256([]byte(canonicalRequest)))
+	signature := hex.EncodeToString(HmacSha256([]byte(s.config.Huawei.SecretKey), stringToSign))
+	authHeader := fmt.Sprintf("SDK-HMAC-SHA256 Access=%s, SignedHeaders=%s, Signature=%s", s.config.Huawei.AccessKey, signedHeaders, signature)
+
+	req.Header.Set("Authorization", authHeader)
+
+	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -115,7 +159,7 @@ func (s *DNSService) hwApiRequest(method, path string, body []byte) ([]byte, err
 	return respBody, nil
 }
 
-// ---- 底层 API 数据结构映射 ----
+// ---- 纯净版数据结构映射 ----
 type HwZoneResp struct {
 	Zones []struct {
 		ID   string `json:"id"`
@@ -206,7 +250,6 @@ func (s *DNSService) GetRecords(provider, domainName string) []DNSRecord {
 		return []DNSRecord{{ID: "error", Type: "ERROR", Name: "查询失败", Content: "无法获取域名的Zone ID"}}
 	}
 
-	// 使用极限分页，拉取该 Zone 下的完整分流记录
 	body, err := s.hwApiRequest("GET", fmt.Sprintf("/v2/zones/%s/recordsets?limit=500", zoneId), nil)
 	if err != nil {
 		return []DNSRecord{{ID: "error", Type: "ERROR", Name: "API请求失败", Content: err.Error()}}
