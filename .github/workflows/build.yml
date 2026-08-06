@@ -32,34 +32,20 @@ jobs:
     - name: Inject Custom Code Files
       shell: pwsh
       run: |
-        # 删除生成的默认无效文件
-        Remove-Item -Path "dns-gui\frontend\src\App.vue" -Force
-        Remove-Item -Path "dns-gui\app.go" -Force
-        Remove-Item -Path "dns-gui\main.go" -Force
+        # 加上了 SilentlyContinue 容错，即使文件不存在也不会报错中断
+        Remove-Item -Path "dns-gui\frontend\src\App.vue" -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "dns-gui\app.go" -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "dns-gui\main.go" -Force -ErrorAction SilentlyContinue
         
-        # 将根目录的自定义文件强行注入到标准工程目录中
-        Copy-Item -Path "App.vue" -Destination "dns-gui\frontend\src\App.vue" -Force
-        Copy-Item -Path "main.go" -Destination "dns-gui\main.go" -Force
-    - name: Inject Custom Code Files
-      shell: pwsh
-      run: |
-        Remove-Item -Path "dns-gui\frontend\src\App.vue" -Force
-        Remove-Item -Path "dns-gui\app.go" -Force
-        Remove-Item -Path "dns-gui\main.go" -Force
         Copy-Item -Path "App.vue" -Destination "dns-gui\frontend\src\App.vue" -Force
         Copy-Item -Path "main.go" -Destination "dns-gui\main.go" -Force
 
-    # --- 新增这个步骤：拉取华为云官方依赖 ---
     - name: Fetch Go Dependencies
       working-directory: ./dns-gui
       run: |
         go get github.com/huaweicloud/huaweicloud-sdk-go-v3/services/dns/v2
         go mod tidy
-    # ----------------------------------------
 
-    - name: Install NPM & Compile Executable
-      working-directory: ./dns-gui
-      run: wails build -platform windows/amd64 -m
     - name: Install NPM & Compile Executable
       working-directory: ./dns-gui
       run: wails build -platform windows/amd64 -m
