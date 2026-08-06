@@ -43,7 +43,8 @@ jobs:
     - name: Fetch Go Dependencies
       working-directory: ./dns-gui
       run: |
-        go get github.com/huaweicloud/huaweicloud-sdk-go-v3/services/dns/v2
+        # 只拉取底层核心鉴权包，不拉取残缺的 dns models
+        go get github.com/huaweicloud/huaweicloud-sdk-go-v3/core/auth/signer
         go mod tidy
 
     - name: Install NPM & Compile Executable
