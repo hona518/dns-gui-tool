@@ -22,11 +22,15 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// DNSRecord 扩充了分流线路(Line)和TTL
 type DNSRecord struct {
 	ID      string `json:"id"`
+	ZoneID  string `json:"zoneId"`
 	Type    string `json:"type"`
 	Name    string `json:"name"`
 	Content string `json:"content"`
+	Line    string `json:"line"`
+	TTL     int32  `json:"ttl"`
 }
 
 type ProviderConfig struct {
@@ -78,23 +82,24 @@ func (s *DNSService) SaveConfig(config AppConfig) bool {
 	return err == nil
 }
 
+func (s *DNSService) getHuaweiClient() *dns.DnsClient {
+	auth := basic.NewCredentialsBuilder().
+		WithAk(s.config.Huawei.AccessKey).
+		WithSk(s.config.Huawei.SecretKey).
+		Build()
+	return dns.NewDnsClient(
+		dns.DnsClientBuilder().
+			WithRegion(region.ValueOf(s.config.Huawei.Region)).
+			WithCredential(auth).
+			Build())
+}
+
 func (s *DNSService) GetDomains(provider string) []string {
 	if provider == "huawei" {
-		if s.config.Huawei.AccessKey == "" || s.config.Huawei.SecretKey == "" {
+		if s.config.Huawei.AccessKey == "" {
 			return []string{"[暂无数据或未配置有效密钥]"}
 		}
-
-		auth := basic.NewCredentialsBuilder().
-			WithAk(s.config.Huawei.AccessKey).
-			WithSk(s.config.Huawei.SecretKey).
-			Build()
-
-		client := dns.NewDnsClient(
-			dns.DnsClientBuilder().
-				WithRegion(region.ValueOf(s.config.Huawei.Region)).
-				WithCredential(auth).
-				Build())
-
+		client := s.getHuaweiClient()
 		request := &model.ListPublicZonesRequest{}
 		response, err := client.ListPublicZones(request)
 		if err != nil {
@@ -111,13 +116,11 @@ func (s *DNSService) GetDomains(provider string) []string {
 				domains = append(domains, name)
 			}
 		}
-		
 		if len(domains) == 0 {
 			return []string{"[账号下暂无托管域名]"}
 		}
 		return domains
 	}
-
 	return []string{"[该厂商真实API尚未接入]"}
 }
 
@@ -125,22 +128,9 @@ func (s *DNSService) GetRecords(provider, domainName string) []DNSRecord {
 	if domainName == "" || domainName[0] == '[' {
 		return []DNSRecord{}
 	}
-
 	if provider == "huawei" {
-		auth := basic.NewCredentialsBuilder().
-			WithAk(s.config.Huawei.AccessKey).
-			WithSk(s.config.Huawei.SecretKey).
-			Build()
-
-		client := dns.NewDnsClient(
-			dns.DnsClientBuilder().
-				WithRegion(region.ValueOf(s.config.Huawei.Region)).
-				WithCredential(auth).
-				Build())
-
-		// 修复 404 错误：改用全局查找接口 ListRecordSets
+		client := s.getHuaweiClient()
 		request := &model.ListRecordSetsRequest{}
-		
 		response, err := client.ListRecordSets(request)
 		if err != nil {
 			return []DNSRecord{{ID: "error", Type: "ERROR", Name: "API请求失败", Content: err.Error()}}
@@ -153,23 +143,33 @@ func (s *DNSService) GetRecords(provider, domainName string) []DNSRecord {
 				if len(rName) > 0 && rName[len(rName)-1] == '.' {
 					rName = rName[:len(rName)-1]
 				}
-				
 				if rName == domainName || (len(rName) > len(domainName) && rName[len(rName)-len(domainName)-1:] == "."+domainName) {
 					host := "@"
 					if rName != domainName {
 						host = rName[:len(rName)-len(domainName)-1]
 					}
-					
 					content := ""
 					if r.Records != nil && len(*r.Records) > 0 {
 						content = (*r.Records)[0]
 					}
-
+					
+					line := "default"
+					if r.Line != nil {
+						line = *r.Line
+					}
+					var ttl int32 = 300
+					if r.Ttl != nil {
+						ttl = *r.Ttl
+					}
+					
 					records = append(records, DNSRecord{
 						ID:      *r.Id,
+						ZoneID:  *r.ZoneId,
 						Type:    *r.Type,
 						Name:    host,
 						Content: content,
+						Line:    line,
+						TTL:     ttl,
 					})
 				}
 			}
@@ -179,12 +179,112 @@ func (s *DNSService) GetRecords(provider, domainName string) []DNSRecord {
 	return []DNSRecord{}
 }
 
+// 获取 ZoneID 的辅助方法
+func (s *DNSService) getZoneIdByName(domainName string) string {
+	client := s.getHuaweiClient()
+	request := &model.ListPublicZonesRequest{
+		Name: &domainName,
+	}
+	response, err := client.ListPublicZones(request)
+	if err == nil && response.Zones != nil && len(*response.Zones) > 0 {
+		return *(*response.Zones)[0].Id
+	}
+	return ""
+}
+
+// 增
+func (s *DNSService) AddRecord(provider, domainName string, record DNSRecord) error {
+	if provider != "huawei" {
+		return fmt.Errorf("暂未支持该厂商")
+	}
+	client := s.getHuaweiClient()
+	zoneId := record.ZoneID
+	if zoneId == "" {
+		zoneId = s.getZoneIdByName(domainName)
+	}
+	if zoneId == "" {
+		return fmt.Errorf("无法获取域名的 Zone ID")
+	}
+
+	fullRecordName := domainName + "."
+	if record.Name != "@" && record.Name != "" {
+		fullRecordName = record.Name + "." + domainName + "."
+	}
+
+	ttl := record.TTL
+	if ttl == 0 {
+		ttl = 300
+	}
+
+	reqBody := &model.CreateRecordSetRequestBody{
+		Name:    fullRecordName,
+		Type:    record.Type,
+		Records: []string{record.Content},
+		Ttl:     &ttl,
+	}
+	if record.Line != "" {
+		reqBody.Line = &record.Line
+	}
+
+	request := &model.CreateRecordSetRequest{
+		ZoneId: zoneId,
+		Body:   reqBody,
+	}
+	_, err := client.CreateRecordSet(request)
+	return err
+}
+
+// 改
+func (s *DNSService) UpdateRecord(provider, domainName string, record DNSRecord) error {
+	if provider != "huawei" {
+		return fmt.Errorf("暂未支持该厂商")
+	}
+	client := s.getHuaweiClient()
+	
+	fullRecordName := domainName + "."
+	if record.Name != "@" && record.Name != "" {
+		fullRecordName = record.Name + "." + domainName + "."
+	}
+
+	reqBody := &model.UpdateRecordSetReq{
+		Name:    fullRecordName,
+		Type:    record.Type,
+		Records: &[]string{record.Content},
+		Ttl:     &record.TTL,
+	}
+	if record.Line != "" {
+		reqBody.Line = &record.Line
+	}
+
+	request := &model.UpdateRecordSetRequest{
+		ZoneId:      record.ZoneID,
+		RecordsetId: record.ID,
+		Body:        reqBody,
+	}
+	_, err := client.UpdateRecordSet(request)
+	return err
+}
+
+// 删
+func (s *DNSService) DeleteRecord(provider, zoneID, recordID string) error {
+	if provider != "huawei" {
+		return fmt.Errorf("暂未支持该厂商")
+	}
+	client := s.getHuaweiClient()
+	request := &model.DeleteRecordSetRequest{
+		ZoneId:      zoneID,
+		RecordsetId: recordID,
+	}
+	_, err := client.DeleteRecordSet(request)
+	return err
+}
+
 func main() {
 	app := NewDNSService()
 	err := wails.Run(&options.App{
-		Title:  "多厂商 DNS 管理终端 - 真实 API 版",
-		Width:  1080,
-		Height: 800,
+		Title:  "多厂商 DNS 管理终端 - CRUD版",
+		Width:  1200,
+		Height: 850,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
