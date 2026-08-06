@@ -22,7 +22,6 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-// DNSRecord 扩充了分流线路(Line)和TTL
 type DNSRecord struct {
 	ID      string `json:"id"`
 	ZoneID  string `json:"zoneId"`
@@ -153,9 +152,7 @@ func (s *DNSService) GetRecords(provider, domainName string) []DNSRecord {
 						content = (*r.Records)[0]
 					}
 					
-					// 规避 SDK v3 缺失 Line 字段的限制，硬编码返回默认值以确保通过编译
 					line := "default"
-					
 					var ttl int32 = 300
 					if r.Ttl != nil {
 						ttl = *r.Ttl
@@ -178,7 +175,6 @@ func (s *DNSService) GetRecords(provider, domainName string) []DNSRecord {
 	return []DNSRecord{}
 }
 
-// 获取 ZoneID 的辅助方法
 func (s *DNSService) getZoneIdByName(domainName string) string {
 	client := s.getHuaweiClient()
 	request := &model.ListPublicZonesRequest{
@@ -216,8 +212,8 @@ func (s *DNSService) AddRecord(provider, domainName string, record DNSRecord) er
 	}
 
 	reqBody := &model.CreateRecordSetRequestBody{
-		Name:    &fullRecordName, // 修复：使用内存地址指针
-		Type:    &record.Type,    // 修复：使用内存地址指针
+		Name:    fullRecordName, // 创建接口：传递普通 string
+		Type:    record.Type,    // 创建接口：传递普通 string
 		Records: []string{record.Content},
 		Ttl:     &ttl,
 	}
@@ -243,8 +239,8 @@ func (s *DNSService) UpdateRecord(provider, domainName string, record DNSRecord)
 	}
 
 	reqBody := &model.UpdateRecordSetReq{
-		Name:    &fullRecordName, // 修复：使用内存地址指针
-		Type:    &record.Type,    // 修复：使用内存地址指针
+		Name:    &fullRecordName, // 修改接口：强制要求传递 *string 指针
+		Type:    &record.Type,    // 修改接口：强制要求传递 *string 指针
 		Records: &[]string{record.Content},
 		Ttl:     &record.TTL,
 	}
