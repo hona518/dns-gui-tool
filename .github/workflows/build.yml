@@ -12,15 +12,15 @@ jobs:
 
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Setup Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version: '1.21'
 
     - name: Setup Node.js
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@v4
       with:
         node-version: '18'
 
@@ -32,11 +32,11 @@ jobs:
       run: npm install
 
     - name: Build Executable
-      # 编译成单文件的原生 Windows exe，禁用控制台黑框 (-upx 开启压缩可选)
       run: wails build -platform windows/amd64 -m
 
     - name: Upload EXE Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: DNS-Manager-Windows
         path: build/bin/*.exe
+        
